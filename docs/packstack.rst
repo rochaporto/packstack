@@ -284,6 +284,9 @@ Keystone Config parameters
 **CONFIG_KEYSTONE_API_VERSION**
     Identity service API version string. ['v2.0', 'v3']
 
+**CONFIG_KEYSTONE_API_VERSION**
+    Keystone API version string ['v2.0', 'v3']
+
 **CONFIG_KEYSTONE_TOKEN_FORMAT**
     Identity service token format (UUID or PKI). The recommended format for new deployments is UUID. ['UUID', 'PKI']
 
