@@ -258,6 +258,42 @@ def initConfig(controller):
              "NEED_CONFIRM": False,
              "CONDITION": False},
         ],
+
+        "NOVA_CELLS": [
+            {"CMD_OPTION": "novacells-enable",
+             "PROMPT": "Enable nova cells",
+             "OPTION_LIST": [],
+             "VALIDATORS": [validators.validate_not_empty],
+             "DEFAULT_VALUE": False,
+             "MASK_INPUT": False,
+             "LOOSE_VALIDATION": True,
+             "CONF_NAME": "CONFIG_NOVA_CELLS_ENABLE",
+             "USE_DEFAULT": False,
+             "NEED_CONFIRM": False,
+             "CONDITION": False},
+            {"CMD_OPTION": "novacells-parent-host",
+             "PROMPT": "Host of the nova top cell (parent)",
+             "OPTION_LIST": [],
+             "VALIDATORS": [validators.validate_not_empty],
+             "DEFAULT_VALUE": False,
+             "MASK_INPUT": False,
+             "LOOSE_VALIDATION": True,
+             "CONF_NAME": "CONFIG_NOVA_CELLS_PARENT_HOST",
+             "USE_DEFAULT": False,
+             "NEED_CONFIRM": False,
+             "CONDITION": False},
+            {"CMD_OPTION": "novacells-child-hosts",
+             "PROMPT": "List of hosts of the nova child cells (comma separated)",
+             "OPTION_LIST": [],
+             "VALIDATORS": [validators.validate_not_empty],
+             "DEFAULT_VALUE": False,
+             "MASK_INPUT": False,
+             "LOOSE_VALIDATION": True,
+             "CONF_NAME": "CONFIG_NOVA_CELLS_CHILD_HOSTS",
+             "USE_DEFAULT": False,
+             "NEED_CONFIRM": False,
+             "CONDITION": False},
+        ],
     }
     update_params_usage(basedefs.PACKSTACK_DOC, nova_params)
 
@@ -290,6 +326,13 @@ def initConfig(controller):
          "DESCRIPTION": "Nova Network VLAN Options",
          "PRE_CONDITION": use_nova_network_vlan,
          "PRE_CONDITION_MATCH": True,
+         "POST_CONDITION": False,
+         "POST_CONDITION_MATCH": True},
+
+        {"GROUP_NAME": "NOVA_CELLS",
+         "DESCRIPTION": "Nova Cells Options",
+         "PRE_CONDITION": "CONFIG_NOVA_CELLS_ENABLE",
+         "PRE_CONDITION_MATCH": "y",
          "POST_CONDITION": False,
          "POST_CONDITION_MATCH": True},
     ]
@@ -331,6 +374,8 @@ def initSequences(controller):
          'functions': [create_vncproxy_manifest]},
         {'title': network_title,
          'functions': [network_function]},
+        {'title': 'Adding Nova Cells manifest entries',
+         'functions': [create_cells_manifest]},
         {'title': 'Adding Nova Common manifest entries',
          'functions': [create_common_manifest]},
     ]
@@ -405,11 +450,13 @@ def gather_host_keys(config, messages):
 def create_api_manifest(config, messages):
     # Since this step is running first, let's create necesary variables here
     # and make them global
-    global compute_hosts, network_hosts
+    global compute_hosts, network_hosts, cellchild_hosts
     com_var = config.get("CONFIG_COMPUTE_HOSTS", "")
     compute_hosts = set([i.strip() for i in com_var.split(",") if i.strip()])
     net_var = config.get("CONFIG_NETWORK_HOSTS", "")
     network_hosts = set([i.strip() for i in net_var.split(",") if i.strip()])
+    cellchild_var = config.get("CONFIG_NOVA_CELLS_CHILD_HOSTS", "")
+    cellchild_hosts = set([i.strip() for i in cellchild_var.split(",") if i.strip()])
 
     # This is a hack around us needing to generate the neutron metadata
     # password, but the nova puppet plugin uses the existence of that
@@ -420,7 +467,7 @@ def create_api_manifest(config, messages):
         config['CONFIG_NEUTRON_METADATA_PW_UNQUOTED'] = 'undef'
     else:
         config['CONFIG_NEUTRON_METADATA_PW_UNQUOTED'] = "%s" % config['CONFIG_NEUTRON_METADATA_PW']
-    manifestfile = "%s_api_nova.pp" % config['CONFIG_CONTROLLER_HOST']
+
     manifestdata = getManifestTemplate("nova_api")
 
     fw_details = dict()
@@ -434,7 +481,14 @@ def create_api_manifest(config, messages):
     config['FIREWALL_NOVA_API_RULES'] = fw_details
     manifestdata += createFirewallResources('FIREWALL_NOVA_API_RULES')
 
+    manifestfile = "%s_api_nova.pp" % config['CONFIG_CONTROLLER_HOST']
+    if config['CONFIG_NOVA_CELLS_ENABLE'] == 'y':
+        manifestfile = "%s_api_nova.pp" % config['CONFIG_NOVA_CELLS_PARENT_HOST']
     appendManifestFile(manifestfile, manifestdata, 'novaapi')
+
+    for host in cellchild_hosts:
+        manifestfile = "%s_api_nova.pp" % host
+        appendManifestFile(manifestfile, manifestdata, 'novaapi')
 
 
 def create_keystone_manifest(config, messages):
@@ -444,15 +498,25 @@ def create_keystone_manifest(config, messages):
 
 
 def create_cert_manifest(config, messages):
-    manifestfile = "%s_nova.pp" % config['CONFIG_CONTROLLER_HOST']
-    manifestdata = getManifestTemplate("nova_cert")
-    appendManifestFile(manifestfile, manifestdata)
+    hosts = set(config['CONFIG_CONTROLLER_HOST'])
+    if config['CONFIG_NOVA_CELLS_ENABLE'] == 'y':
+        hosts = cellchild_hosts
+
+    for host in hosts:
+        manifestfile = "%s_nova.pp" % host
+        manifestdata = getManifestTemplate("nova_cert")
+        appendManifestFile(manifestfile, manifestdata)
 
 
 def create_conductor_manifest(config, messages):
-    manifestfile = "%s_nova.pp" % config['CONFIG_CONTROLLER_HOST']
-    manifestdata = getManifestTemplate("nova_conductor")
-    appendManifestFile(manifestfile, manifestdata)
+    hosts = set(config['CONFIG_CONTROLLER_HOST'])
+    if config['CONFIG_NOVA_CELLS_ENABLE'] == 'y':
+        hosts = cellchild_hosts
+
+    for host in hosts:
+        manifestfile = "%s_nova.pp" % host
+        manifestdata = getManifestTemplate("nova_conductor")
+        appendManifestFile(manifestfile, manifestdata)
 
 
 def create_compute_manifest(config, messages):
@@ -613,52 +677,49 @@ def create_network_manifest(config, messages):
 
 
 def create_sched_manifest(config, messages):
-    manifestfile = "%s_nova.pp" % config['CONFIG_CONTROLLER_HOST']
-    if config['CONFIG_IRONIC_INSTALL'] == 'y':
-        manifestdata = getManifestTemplate("nova_sched_ironic.pp")
-        ram_alloc = '1.0'
-        config['CONFIG_NOVA_SCHED_RAM_ALLOC_RATIO'] = ram_alloc
-        manifestdata += getManifestTemplate("nova_sched.pp")
-    else:
-        manifestdata = getManifestTemplate("nova_sched.pp")
-    appendManifestFile(manifestfile, manifestdata)
+    hosts = set(config['CONFIG_CONTROLLER_HOST'])
+    if config['CONFIG_NOVA_CELLS_ENABLE'] == 'y':
+        hosts = cellchild_hosts
+
+    for host in hosts:
+        if config['CONFIG_IRONIC_INSTALL'] == 'y':
+            manifestdata = getManifestTemplate("nova_sched_ironic.pp")
+            ram_alloc = '1.0'
+            config['CONFIG_NOVA_SCHED_RAM_ALLOC_RATIO'] = ram_alloc
+            manifestdata += getManifestTemplate("nova_sched.pp")
+        else:
+            manifestdata = getManifestTemplate("nova_sched.pp")
+            manifestfile = "%s_nova.pp" % host
 
 
 def create_vncproxy_manifest(config, messages):
-    manifestfile = "%s_nova.pp" % config['CONFIG_CONTROLLER_HOST']
-    manifestdata = getManifestTemplate("nova_vncproxy")
-    appendManifestFile(manifestfile, manifestdata)
+    hosts = set(config['CONFIG_CONTROLLER_HOST'])
+    if config['CONFIG_NOVA_CELLS_ENABLE'] == 'y':
+        hosts = cellchild_hosts
+
+    for host in hosts:
+        manifestfile = "%s_nova.pp" % host
+        manifestdata = getManifestTemplate("nova_vncproxy")
+        appendManifestFile(manifestfile, manifestdata)
 
 
 def create_common_manifest(config, messages):
-    global compute_hosts, network_hosts
+    global compute_hosts, network_hosts, cellchild_hosts
     network_type = (config['CONFIG_NEUTRON_INSTALL'] == "y" and
                     'neutron' or 'nova')
     network_multi = len(network_hosts) > 1
     dbacces_hosts = set([config.get('CONFIG_CONTROLLER_HOST')])
     dbacces_hosts |= network_hosts
-
+    dbacces_hosts |= cellchild_hosts
+ 
+    print manifestfiles.getFiles()
     for manifestfile, marker in manifestfiles.getFiles():
-        pw_in_sqlconn = False
         if manifestfile.endswith("_nova.pp"):
             host, manifest = manifestfile.split('_', 1)
             host = host.strip()
 
-            if host in compute_hosts and host not in dbacces_hosts:
-                # we should omit password in case we are installing only
-                # nova-compute to the host
-                perms = "nova"
-                pw_in_sqlconn = False
-            else:
-                perms = "nova:%s" % config['CONFIG_NOVA_DB_PW']
-                pw_in_sqlconn = True
-
-            mariadb_host_url = config['CONFIG_MARIADB_HOST_URL']
-            sqlconn = "mysql://%s@%s/nova" % (perms, mariadb_host_url)
-            if pw_in_sqlconn:
-                config['CONFIG_NOVA_SQL_CONN_PW'] = sqlconn
-            else:
-                config['CONFIG_NOVA_SQL_CONN_NOPW'] = sqlconn
+            config['CONFIG_NOVA_DB_USER'] = 'nova'
+            config['CONFIG_NOVA_DB_HOST'] = config['CONFIG_MARIADB_HOST'] 
 
             # for nova-network in multihost mode each compute host is metadata
             # host otherwise we use api host
@@ -670,10 +731,10 @@ def create_common_manifest(config, messages):
             config['CONFIG_NOVA_METADATA_HOST'] = metadata
 
             data = getManifestTemplate(get_mq(config, "nova_common"))
-            if pw_in_sqlconn:
-                data += getManifestTemplate("nova_common_pw")
-            else:
+            if host in compute_hosts and host not in dbacces_hosts:
                 data += getManifestTemplate("nova_common_nopw")
+            else:
+                data += getManifestTemplate("nova_common_pw")
             appendManifestFile(os.path.split(manifestfile)[1], data)
 
 
@@ -692,3 +753,29 @@ def create_neutron_manifest(config, messages):
         if manifestfile.endswith("_nova.pp"):
             data = getManifestTemplate("nova_neutron")
             appendManifestFile(os.path.split(manifestfile)[1], data)
+
+
+def create_cells_manifest(config, messages):
+    if config['CONFIG_NOVA_CELLS_ENABLE'] != 'y':
+        return
+
+    cellchilds = {}
+    for host in cellchild_hosts:
+        cellchilds[host] = {}
+        cellchilds[host]['ensure'] = 'present'
+        cellchilds[host]['cell_type'] = 'child'
+        cellchilds[host]['rabbit_username'] = config['CONFIG_AMQP_AUTH_USER']
+        cellchilds[host]['rabbit_password'] = config['CONFIG_AMQP_AUTH_PASSWORD']
+        cellchilds[host]['rabbit_hosts'] = config['CONFIG_AMQP_HOST']
+        cellchilds[host]['rabbit_port'] = config['CONFIG_AMQP_CLIENTS_PORT']
+        cellchilds[host]['weight_offset'] = '1.0'
+        cellchilds[host]['weight_scale'] = '1.0'
+
+        manifestfile = "%s_nova.pp" % host
+        manifestdata = getManifestTemplate("nova_cells_child")
+        appendManifestFile(manifestfile, manifestdata)
+
+    config['CONFIG_NOVA_CELLS_CHILDS'] = cellchilds
+    manifestfile = "%s_nova.pp" % config['CONFIG_NOVA_CELLS_PARENT_HOST']
+    manifestdata = getManifestTemplate("nova_cells_parent")
+    appendManifestFile(manifestfile, manifestdata)

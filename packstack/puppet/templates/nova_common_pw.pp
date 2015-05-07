@@ -10,8 +10,17 @@ if $config_use_neutron == 'y' {
 # preventing a clash with rules being set by nova-compute and nova-network
 Firewall <| |> -> Class['nova']
 
+$user = hiera('CONFIG_NOVA_DB_USER', 'nova')
+$password = hiera('CONFIG_NOVA_DB_PW', '')
+$config_use_cells = hiera('CONFIG_NOVA_CELLS_ENABLE')
+if $config_use_cells {
+    $host = 'localhost'
+} else {
+    $host = hiera('CONFIG_NOVA_DB_HOST')
+}
+$sqlconn = "mysql://${user}:${password}@${host}/nova"
 nova_config{
-  'DEFAULT/sql_connection':        value => hiera('CONFIG_NOVA_SQL_CONN_PW');
+  'DEFAULT/sql_connection':        value => $sqlconn;
   'DEFAULT/metadata_host':         value => hiera('CONFIG_CONTROLLER_HOST');
   'DEFAULT/default_floating_pool': value => $default_floating_pool;
 }

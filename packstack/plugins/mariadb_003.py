@@ -90,7 +90,9 @@ def initConfig(controller):
 def initSequences(controller):
     mariadbsteps = [
         {'title': 'Adding MariaDB manifest entries',
-         'functions': [create_manifest]}
+         'functions': [create_manifest]},
+        {'title': 'Adding MariaDB child cells manifest entries',
+         'functions': [create_cells_manifest]},
     ]
     controller.addSequence("Installing MariaDB", [], [], mariadbsteps)
 
@@ -141,3 +143,38 @@ def create_manifest(config, messages):
 
     manifestdata.append(createFirewallResources('FIREWALL_MARIADB_RULES'))
     appendManifestFile(manifestfile, "\n".join(manifestdata), 'pre')
+
+
+def create_cells_manifest(config, messages):
+    cellchild_var = config.get("CONFIG_NOVA_CELLS_CHILD_HOSTS", "")
+    cellchild_hosts = set([i.strip() for i in cellchild_var.split(",") if i.strip()])
+
+    def append_for(module, suffix):
+        # Modules have to be appended to the existing mysql.pp
+        # otherwise pp will fail for some of them saying that
+        # Mysql::Config definition is missing.
+        template = "mariadb_%s_%s" % (module, suffix)
+        manifestdata.append(getManifestTemplate(template))
+
+    manifestdata = ""
+    for cellhost in cellchild_hosts:
+        manifestfile = "%s_mariadb.pp" % cellhost
+        manifestdata = [getManifestTemplate('mariadb_install')]
+
+        append_for("nova", "install")
+
+        hosts = filtered_hosts(config, exclude=False, dbhost=True)
+
+        fw_details = dict()
+        for host in hosts:
+            key = "mariadb_%s" % host
+            fw_details.setdefault(key, {})
+            fw_details[key]['host'] = "%s" % host
+            fw_details[key]['service_name'] = "mariadb"
+            fw_details[key]['chain'] = "INPUT"
+            fw_details[key]['ports'] = ['3306']
+            fw_details[key]['proto'] = "tcp"
+        config['FIREWALL_MARIADB_RULES'] = fw_details
+
+        manifestdata.append(createFirewallResources('FIREWALL_MARIADB_RULES'))
+        appendManifestFile(manifestfile, "\n".join(manifestdata), 'pre')

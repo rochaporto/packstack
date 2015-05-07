@@ -720,6 +720,18 @@ Nova Network VLAN Options
 **CONFIG_NOVA_NETWORK_SIZE**
     Number of addresses in each private subnet (Compute networking).
 
+Nova Cells Options
+------------------
+
+**CONFIG_NOVA_CELLS_ENABLE**
+    Specify 'y' to enable nova cells setup.
+
+**CONFIG_NOVA_CELLS_PARENT_HOST**
+    Host of the nova top cell.
+
+**CONFIG_NOVA_CELLS_CHILD_HOSTS**
+    List of hosts of the nova child cells.
+
 Neutron config
 --------------
 
